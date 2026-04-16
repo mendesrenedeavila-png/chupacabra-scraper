@@ -1,0 +1,9 @@
+aiohttp==3.9.5
+aiofiles==23.2.1
+beautifulsoup4==4.12.3
+lxml==5.2.1
+markdownify==0.12.1
+python-slugify==8.0.4
+tqdm==4.66.2
+markdown==3.6
+fpdf2==2.7.9
