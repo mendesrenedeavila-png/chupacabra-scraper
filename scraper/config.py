@@ -88,6 +88,13 @@ FLAT_OUTPUT: bool = False
 # Use --force on the CLI to override and re-scrape everything.
 INCREMENTAL: bool = True
 
+# ── Consolidation ─────────────────────────────────────────────────────────────
+
+# When True, all output files are merged into a single file (output/_all.<ext>)
+# at the end of the crawl.  Not applicable to CSV (already a single file).
+# Can be overridden at runtime with the --consolidate CLI flag.
+CONSOLIDATE: bool = False
+
 # ── RAG chunking ───────────────────────────────────────────────────────────────
 
 # When True, pages longer than MAX_CHUNK_WORDS are split into smaller files

@@ -306,6 +306,7 @@ async def crawl(
     do_chunk: bool,
     flat_output: bool,
     output_fmt: str,
+    do_consolidate: bool = False,
 ) -> CrawlStats:
     output_dir = Path(config.OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -383,6 +384,14 @@ async def crawl(
         await _write_index(output_dir, stats)
     else:
         logger.info("CSV output written to %s", csv_path)
+
+    if do_consolidate:
+        consolidated = formatter.consolidate_files(
+            stats.saved_files, output_dir, output_fmt
+        )
+        if consolidated:
+            logger.info("Consolidated output: %s", consolidated)
+
     return stats
 
 
@@ -443,6 +452,26 @@ def _parse_args() -> argparse.Namespace:
         default=config.DOCS_FILE,
         help="Path to the file containing root URLs.",
     )
+    parser.add_argument(
+        "--consolidate",
+        action="store_true",
+        default=config.CONSOLIDATE,
+        help=(
+            "Merge all output files into a single output/_all.<ext> file after scraping. "
+            "Not applicable to CSV (already a single file)."
+        ),
+    )
+    parser.add_argument(
+        "--consolidate-only",
+        action="store_true",
+        default=False,
+        dest="consolidate_only",
+        help=(
+            "Skip the crawl entirely and only merge existing output files into "
+            "output/_all.<ext>.  Implies --consolidate.  Use with --format to "
+            "select which extension to consolidate."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -450,6 +479,21 @@ def main() -> None:
     args = _parse_args()
 
     _setup_logging(config.LOG_FILE)
+
+    # ── consolidate-only mode: skip crawl, merge existing output files ────────
+    if args.consolidate_only:
+        output_dir = Path(config.OUTPUT_DIR)
+        logger.info(
+            "Consolidate-only mode: merging existing %s files in %s",
+            args.output_fmt,
+            output_dir,
+        )
+        consolidated = formatter.consolidate_files([], output_dir, args.output_fmt)
+        if consolidated:
+            logger.info("Consolidated output: %s", consolidated)
+        else:
+            logger.warning("No files were consolidated.")
+        return
 
     if args.urls:
         root_urls = [normalize_url(u) for u in args.urls]
@@ -470,8 +514,8 @@ def main() -> None:
 
     incremental = config.INCREMENTAL and not args.force
     logger.info(
-        "Starting crawl: depth=%d, workers=%d, incremental=%s, chunk=%s, flat=%s, format=%s, output=%s",
-        args.depth, args.workers, incremental, args.chunk, args.flat, args.output_fmt, config.OUTPUT_DIR,
+        "Starting crawl: depth=%d, workers=%d, incremental=%s, chunk=%s, flat=%s, format=%s, consolidate=%s, output=%s",
+        args.depth, args.workers, incremental, args.chunk, args.flat, args.output_fmt, args.consolidate, config.OUTPUT_DIR,
     )
 
     stats = asyncio.run(crawl(
@@ -482,6 +526,7 @@ def main() -> None:
         do_chunk=args.chunk,
         flat_output=args.flat,
         output_fmt=args.output_fmt,
+        do_consolidate=args.consolidate,
     ))
 
     logger.info(

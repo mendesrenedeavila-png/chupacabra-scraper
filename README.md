@@ -16,7 +16,7 @@ Async Python scraper that crawls any Confluence-based (or HTML) documentation si
 
 ## Why Chupacabra Scraper instead of a generic scraper?
 
-Most scrapers blast through a site, produce one giant file per page, never skip unchanged content, and leave you with a mess of unattributed text.  Chupacabra Scraper was designed specifically for **RAG (Retrieval-Augmented Generation)** knowledge bases and addresses four concrete pain points:
+Most scrapers blast through a site, produce one giant file per page, never skip unchanged content, and leave you with a mess of unattributed text.  Chupacabra Scraper was designed specifically for **RAG (Retrieval-Augmented Generation)** knowledge bases and addresses five concrete pain points:
 
 ### 1. Multiple output formats
 
@@ -32,7 +32,36 @@ Choose the format that fits your pipeline with `--format`:
 
 **CSV mode** is especially powerful for RAG: every page (or chunk) becomes a single row with columns `title`, `source_url`, `scraped_at`, `breadcrumb`, `chunk`, `section`, `content` — ready to pipe into a vector database or embedding API.
 
-### 2. Incremental scraping — only process what changed
+### 2. Single-file consolidation
+
+With `--consolidate`, all scraped files are merged into one `output/_all.<ext>` file at the end of the crawl — **without deleting the individual files**.  This is useful when a target system accepts only a single file upload, or when you want a portable snapshot of the entire documentation.
+
+```bash
+# Crawl and consolidate in one step
+python scrape.py --consolidate
+
+# Consolidate existing output files without re-crawling
+python scrape.py --consolidate-only --format md
+```
+
+| Mode | What it does |
+|------|-------------|
+| `--consolidate` | Crawl normally, then merge all output files into `output/_all.<ext>` |
+| `--consolidate-only` | Skip the crawl; merge files that already exist in `output/` |
+
+**Per-format consolidated output:**
+
+| Format | Consolidated file | Structure |
+|--------|-------------------|-----------|
+| `md` | `output/_all.md` | YAML header + page sections separated by `---`, each with title heading and source URL |
+| `txt` | `output/_all.txt` | Banner separator per page, plain text body |
+| `html` | `output/_all.html` | Single HTML page with sticky side-bar TOC, anchored sections, source links |
+| `csv` | *(skipped — `_pages.csv` already consolidates all pages)* | |
+| `pdf` | `output/_all.pdf` | Multi-page PDF, one page per scraped document |
+
+> **Individual files are never deleted.**  `--consolidate` / `--consolidate-only` always *adds* `output/_all.<ext>` alongside the existing per-page files.
+
+### 3. Incremental scraping — only process what changed
 
 A persistent content-hash state file (`output/.scraper-state.json`) records a SHA-256 fingerprint of every scraped page.  On re-runs, pages whose body has not changed are skipped entirely — **no network request, no disk write**.
 
@@ -45,7 +74,7 @@ This makes it safe to schedule Chupacabra Scraper as a daily CI job without hamm
 
 > **Format changes are handled automatically:** switching from `--format md` to `--format html` on the next run invalidates the cache for all pages, so files are re-written in the new format even if content is unchanged.
 
-### 3. RAG-optimised semantic chunking
+### 4. RAG-optimised semantic chunking
 
 Any vector/RAG pipeline retrieves the **closest matching chunk**, not the full document.  A 10 000-word page will score poorly against specific questions because irrelevant sections dilute the relevance signal.
 
@@ -64,7 +93,7 @@ Each chunk:
 - Adds `section:` and `chunk: "2/3"` metadata for attribution.
 - Repeats the last `CHUNK_OVERLAP_WORDS` words from the previous chunk as context.
 
-### 4. Hierarchical breadcrumb metadata
+### 5. Hierarchical breadcrumb metadata
 
 Every output file carries a `breadcrumb` field in its YAML front-matter (or as a column in CSV) that records the full ancestor path in the site tree:
 
@@ -237,6 +266,8 @@ python scrape.py [OPTIONS]
 | `--force` | flag | off | **Force full re-scrape, ignoring the incremental state.** Chupacabra normally skips pages whose content hash has not changed since the last run (incremental mode). Pass `--force` to bypass this check and re-download every page regardless of whether it changed. Use this when: you suspect the state file (`.scraper-state.json`) is corrupted; you changed something in `extractor.py` or `config.py` that affects the output format but the page body itself did not change; you want a guaranteed fresh copy of everything. **Warning:** `--force` deletes and rewrites every file in the output directory for the crawled sections. |
 | `--urls` | `URL...` | _(from docs file)_ | **Override root URLs inline.** Provide one or more space-separated URLs directly on the command line instead of reading from `CONTEXT/documentacao.md`. Useful for quick one-off tests or CI jobs targeting a single section. |
 | `--docs-file` | `PATH` | `CONTEXT/documentacao.md` | **Path to a custom URL list file.** Points Chupacabra at a different input file instead of the default one. Each line in the file should contain one URL; lines starting with `#` are treated as comments. |
+| `--consolidate` | flag | off | **Merge all output files into a single `output/_all.<ext>` file** after the crawl completes.  Individual files are **not** deleted.  Not applicable to CSV (already a single file).  Equivalent to running `--consolidate-only` immediately after a crawl. |
+| `--consolidate-only` | flag | off | **Skip the crawl and only merge existing output files** into `output/_all.<ext>`.  Useful to combine a previously scraped output directory without re-downloading anything.  Use with `--format` to select which extension to consolidate. |
 
 ### Examples
 
@@ -270,6 +301,15 @@ python scrape.py --flat
 
 # Deep crawl with RAG chunking, flat CSV output
 python scrape.py --depth 5 --workers 5 --chunk --flat --format csv
+
+# Crawl and produce a single consolidated Markdown file alongside individual files
+python scrape.py --consolidate
+
+# Consolidate an already-scraped output directory into one HTML file (no re-crawl)
+python scrape.py --consolidate-only --format html
+
+# Consolidate existing PDF files into one combined PDF
+python scrape.py --consolidate-only --format pdf
 ```
 
 ---
@@ -309,6 +349,7 @@ Page body in clean Markdown ...
 output/
 ├── _index.md               ← master index (md/txt/html/pdf modes)
 ├── _pages.csv              ← all pages as rows (csv mode only)
+├── _all.md                 ← consolidated file (--consolidate / --consolidate-only)
 ├── .scraper-state.json     ← incremental state (do not delete)
 ├── scraper.log             ← full log of the last run
 ├── section-a/
@@ -316,6 +357,8 @@ output/
 │   └── page-two.chunk-01.md  ← only when --chunk is active
 └── ...
 ```
+
+> `_all.<ext>` is created alongside the individual files — individual files are **never** removed.
 
 ---
 
@@ -326,6 +369,7 @@ output/
 3. Upload the files from `output/` (by section folder or all at once)
 4. For Markdown/HTML/TXT: include `output/_index.md` as a navigation reference
 5. For CSV: upload `output/_pages.csv` directly as a structured knowledge source
+6. For single-file upload: run `--consolidate` and upload `output/_all.<ext>` only
 
 > **Tip:** Use `--chunk --format csv` for the best retrieval precision in vector-based RAG pipelines.
 
@@ -347,6 +391,7 @@ All settings are in `scraper/config.py`:
 | `CHUNK_PAGES` | `False` | Enable RAG chunking by default |
 | `MAX_CHUNK_WORDS` | `1500` | Maximum words per chunk |
 | `CHUNK_OVERLAP_WORDS` | `100` | Word overlap between consecutive chunks |
+| `CONSOLIDATE` | `False` | Merge all output files into `_all.<ext>` by default |
 | `ALLOWED_DOMAINS` | _(derived from `CONTEXT/documentacao.md`)_ | Domains to follow links on — **set automatically, no manual edit needed** |
 | `PREFERRED_DOMAIN` | _(first hostname in `CONTEXT/documentacao.md`)_ | Canonical domain for URL normalisation — **set automatically** |
 
@@ -356,13 +401,14 @@ All settings are in `scraper/config.py`:
 
 ```
 scraper/
-├── scrape.py      # Entry point — async BFS orchestrator
-├── extractor.py   # Confluence REST API + HTML scraping + Markdown conversion
-├── formatter.py   # Output format converters (md / txt / html / csv / pdf)
-├── chunker.py     # Semantic chunking at heading boundaries
-├── state.py       # Incremental state (content hashing)
-├── utils.py       # URL normalisation, slug generation, link filtering
-├── config.py      # All configurable settings
+├── scrape.py           # Entry point — async BFS orchestrator
+├── extractor.py        # Confluence REST API + HTML scraping + Markdown conversion
+├── formatter.py        # Output format converters + consolidate_files()
+├── chunker.py          # Semantic chunking at heading boundaries
+├── state.py            # Incremental state (content hashing)
+├── utils.py            # URL normalisation, slug generation, link filtering
+├── config.py           # All configurable settings
+├── test_consolidate.py # Unit tests for consolidation (no network required)
 └── requirements.txt
 ```
 
@@ -371,6 +417,7 @@ scraper/
 2. Fall back to **HTML scraping** with BeautifulSoup for standard `/display/SPACE/PageTitle` style URLs or any other HTML page.
 3. Convert extracted HTML to Markdown with `markdownify`, strip navigation noise, add YAML front-matter.
 4. Convert the Markdown to the target output format via `formatter.py`.
+5. After the crawl (when `--consolidate` is active), call `formatter.consolidate_files()` to merge all output files into `output/_all.<ext>`.
 
 **Crawl strategy:** async BFS with a `asyncio.Semaphore` limiting concurrent workers.  A `visited` set prevents cycles.  The `parent_map` tracks child→parent relationships for breadcrumb generation.
 
@@ -403,7 +450,7 @@ Always respect the terms of service of the websites you scrape.*
 
 ## Por que o Chupacabra Scraper e não um scraper genérico?
 
-A maioria dos scrapers varre um site, gera um arquivo gigante por página, nunca pula conteúdo não alterado e deixa um caos de texto sem atribuição. O Chupacabra Scraper foi criado especificamente para bases de conhecimento **RAG (Retrieval-Augmented Generation)** e resolve quatro problemas concretos:
+A maioria dos scrapers varre um site, gera um arquivo gigante por página, nunca pula conteúdo não alterado e deixa um caos de texto sem atribuição. O Chupacabra Scraper foi criado especificamente para bases de conhecimento **RAG (Retrieval-Augmented Generation)** e resolve cinco problemas concretos:
 
 ### 1. Múltiplos formatos de saída
 
@@ -419,7 +466,36 @@ Escolha o formato adequado ao seu pipeline com `--format`:
 
 **O modo CSV** é especialmente poderoso para RAG: cada página (ou chunk) vira uma linha com as colunas `title`, `source_url`, `scraped_at`, `breadcrumb`, `chunk`, `section`, `content` — pronto para alimentar um banco vetorial ou API de embedding.
 
-### 2. Scraping incremental — processa apenas o que mudou
+### 2. Consolidação em arquivo único
+
+Com `--consolidate`, todos os arquivos raspados são mesclados em um único `output/_all.<ext>` ao final do crawl — **sem excluir os arquivos individuais**. Útil quando o sistema de destino aceita apenas um único arquivo, ou para criar um snapshot portátil de toda a documentação.
+
+```bash
+# Crawl e consolidação em uma única etapa
+python scrape.py --consolidate
+
+# Consolidar arquivos existentes sem re-crawl
+python scrape.py --consolidate-only --format md
+```
+
+| Modo | O que faz |
+|------|-----------|
+| `--consolidate` | Faz o crawl normalmente e depois mescla tudo em `output/_all.<ext>` |
+| `--consolidate-only` | Pula o crawl; mescla os arquivos que já existem em `output/` |
+
+**Saída consolidada por formato:**
+
+| Formato | Arquivo consolidado | Estrutura |
+|---------|---------------------|-----------|
+| `md` | `output/_all.md` | Cabeçalho YAML + seções por página separadas por `---`, com título e URL de origem |
+| `txt` | `output/_all.txt` | Separador por página com título, corpo em texto puro |
+| `html` | `output/_all.html` | Página HTML única com sumário lateral fixo, seções ancoradas e links de origem |
+| `csv` | *(ignorado — `_pages.csv` já consolida tudo)* | |
+| `pdf` | `output/_all.pdf` | PDF de múltiplas páginas, uma por documento raspado |
+
+> **Os arquivos individuais nunca são excluídos.** `--consolidate` / `--consolidate-only` sempre *adiciona* `output/_all.<ext>` ao lado dos arquivos por página já existentes.
+
+### 3. Scraping incremental — processa apenas o que mudou
 
 Um arquivo de estado persistente (`output/.scraper-state.json`) armazena um fingerprint SHA-256 de cada página raspada. Em execuções subsequentes, páginas cujo conteúdo não mudou são ignoradas completamente — **sem requisição de rede, sem escrita em disco**.
 
@@ -432,7 +508,7 @@ Isso permite agendar o Chupacabra Scraper como um job diário de CI sem sobrecar
 
 > **Mudanças de formato são tratadas automaticamente:** trocar de `--format md` para `--format html` na próxima execução invalida o cache de todas as páginas, fazendo com que os arquivos sejam reescritos no novo formato mesmo que o conteúdo não tenha mudado.
 
-### 3. Chunking semântico otimizado para RAG
+### 4. Chunking semântico otimizado para RAG
 
 Qualquer pipeline de vetor/RAG recupera o **chunk mais relevante**, não o documento inteiro. Uma página de 10 000 palavras terá pontuação baixa para perguntas específicas porque seções irrelevantes diluem o sinal de relevância.
 
@@ -451,7 +527,7 @@ Cada chunk:
 - Adiciona metadados `section:` e `chunk: "2/3"` para rastreabilidade.
 - Repete as últimas `CHUNK_OVERLAP_WORDS` palavras do chunk anterior como contexto.
 
-### 4. Metadados de breadcrumb hierárquico
+### 5. Metadados de breadcrumb hierárquico
 
 Cada arquivo de saída carrega um campo `breadcrumb` no seu front-matter YAML (ou como coluna no CSV) que registra o caminho completo de ancestrais na árvore do site:
 
@@ -624,6 +700,8 @@ python scrape.py [OPÇÕES]
 | `--force` | flag | desligado | **Força o re-scraping completo, ignorando o estado incremental.** O Chupacabra normalmente pula páginas cujo hash de conteúdo não mudou. Use `--force` para baixar tudo novamente independentemente de mudanças. |
 | `--urls` | `URL...` | _(do arquivo)_ | **Substitui as URLs raiz inline.** Informe uma ou mais URLs separadas por espaço diretamente na linha de comando em vez de ler de `CONTEXT/documentacao.md`. |
 | `--docs-file` | `PATH` | `CONTEXT/documentacao.md` | **Caminho para um arquivo de lista de URLs customizado.** Cada linha deve conter uma URL; linhas começando com `#` são comentários. |
+| `--consolidate` | flag | desligado | **Faz o crawl normalmente e depois mescla todos os arquivos em `output/_all.<ext>`.** Os arquivos individuais nunca são excluídos. |
+| `--consolidate-only` | flag | desligado | **Pula o crawl e apenas mescla os arquivos de saída existentes** em `output/_all.<ext>`. Útil para combinar um diretório de saída já raspado sem re-baixar nada. Use com `--format` para selecionar a extensão a consolidar. |
 
 ### Exemplos
 
@@ -657,6 +735,15 @@ python scrape.py --flat
 
 # Crawl profundo com chunking RAG e saída CSV plana
 python scrape.py --depth 5 --workers 5 --chunk --flat --format csv
+
+# Crawl e consolidação em uma única etapa
+python scrape.py --consolidate
+
+# Consolidar arquivos Markdown existentes sem re-crawl
+python scrape.py --consolidate-only --format md
+
+# Consolidar saída HTML existente em uma única página
+python scrape.py --consolidate-only --format html
 ```
 
 ---
@@ -696,6 +783,7 @@ Corpo da página em Markdown limpo ...
 output/
 ├── _index.md               ← índice mestre (modos md/txt/html/pdf)
 ├── _pages.csv              ← todas as páginas como linhas (modo csv)
+├── _all.md                 ← arquivo consolidado (apenas com --consolidate)
 ├── .scraper-state.json     ← estado incremental (não deletar)
 ├── scraper.log             ← log completo da última execução
 ├── secao-a/
@@ -703,6 +791,8 @@ output/
 │   └── pagina-dois.chunk-01.md  ← apenas quando --chunk está ativo
 └── ...
 ```
+
+> **`--consolidate` é aditivo:** os arquivos individuais por página nunca são excluídos. O `_all.<ext>` é criado ao lado deles.
 
 ---
 
@@ -713,6 +803,7 @@ output/
 3. Faça upload dos arquivos de `output/` (por pasta de seção ou todos de uma vez)
 4. Para Markdown/HTML/TXT: inclua `output/_index.md` como referência de navegação
 5. Para CSV: faça upload de `output/_pages.csv` diretamente como fonte de conhecimento estruturada
+6. Para upload de arquivo único: use `--consolidate` e faça upload de `output/_all.<ext>` como único arquivo de conhecimento
 
 > **Dica:** Use `--chunk --format csv` para a melhor precisão de recuperação em pipelines RAG baseados em vetor.
 
@@ -731,6 +822,7 @@ Todas as configurações estão em `scraper/config.py`:
 | `DELAY_SECONDS` | `0.5` | Intervalo entre requisições por worker |
 | `REQUEST_TIMEOUT` | `30` | Timeout HTTP em segundos |
 | `INCREMENTAL` | `True` | Habilitar detecção de mudanças para re-execuções |
+| `CONSOLIDATE` | `False` | Mesclar todos os arquivos de saída em `output/_all.<ext>` após o crawl |
 | `CHUNK_PAGES` | `False` | Habilitar chunking RAG por padrão |
 | `MAX_CHUNK_WORDS` | `1500` | Máximo de palavras por chunk |
 | `CHUNK_OVERLAP_WORDS` | `100` | Sobreposição de palavras entre chunks consecutivos |
@@ -743,13 +835,14 @@ Todas as configurações estão em `scraper/config.py`:
 
 ```
 scraper/
-├── scrape.py      # Ponto de entrada — orquestrador BFS assíncrono
-├── extractor.py   # API REST do Confluence + scraping HTML + conversão para Markdown
-├── formatter.py   # Conversores de formato de saída (md / txt / html / csv / pdf)
-├── chunker.py     # Chunking semântico nos limites de cabeçalho
-├── state.py       # Estado incremental (hash de conteúdo)
-├── utils.py       # Normalização de URL, geração de slug, filtragem de links
-├── config.py      # Todas as configurações ajustáveis
+├── scrape.py            # Ponto de entrada — orquestrador BFS assíncrono
+├── extractor.py         # API REST do Confluence + scraping HTML + conversão para Markdown
+├── formatter.py         # Conversores de formato de saída (md / txt / html / csv / pdf) + consolidação
+├── chunker.py           # Chunking semântico nos limites de cabeçalho
+├── state.py             # Estado incremental (hash de conteúdo)
+├── utils.py             # Normalização de URL, geração de slug, filtragem de links
+├── config.py            # Todas as configurações ajustáveis
+├── test_consolidate.py  # Testes unitários para consolidate_files()
 └── requirements.txt
 ```
 
@@ -758,6 +851,7 @@ scraper/
 2. Fallback para **scraping HTML** com BeautifulSoup para URLs no estilo `/display/SPACE/TituloDaPagina` ou qualquer outra página HTML.
 3. Converte o HTML extraído para Markdown com `markdownify`, remove ruído de navegação, adiciona front-matter YAML.
 4. Converte o Markdown para o formato de saída alvo via `formatter.py`.
+5. Se `--consolidate` estiver ativo, chama `formatter.consolidate_files()` após o crawl para mesclar todos os arquivos em `output/_all.<ext>`.
 
 **Estratégia de crawl:** BFS assíncrono com `asyncio.Semaphore` limitando workers concorrentes. Um conjunto `visited` previne ciclos. O `parent_map` rastreia relacionamentos filho→pai para geração de breadcrumbs.
 
